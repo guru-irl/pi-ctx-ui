@@ -143,52 +143,79 @@ function resolveContextModeRoot(): string | null {
 }
 
 export default function (pi: ExtensionAPI) {
-	let started = false;
-	let handle: { shutdown?: () => void } | null = null;
+	let readiness: Promise<void> | null = null;
+	let bridge: { defs: any[]; shutdown?: () => void } | null = null;
+
+	function applyOverrides(): void {
+		if (!bridge) return;
+		for (const def of bridge.defs) {
+			const name = def.name as string;
+			// Reuse context-mode's exact tool def (name, schema, execute → its MCP
+			// client); only swap in our nicer renderers.
+			pi.registerTool({
+				...def,
+				renderCall: (args: any, theme: any) => renderCall(name, args, theme),
+				renderResult: (res: any, opts: any, theme: any) => renderResult(name, res, opts, theme),
+			});
+		}
+	}
+
+	async function ensureBridge(): Promise<boolean> {
+		// Skip nested/subagent bridges — ctx_* tools aren't bridged at depth > 0.
+		const depth = Number.parseInt(process.env.CONTEXT_MODE_BRIDGE_DEPTH ?? "0", 10);
+		if (Number.isFinite(depth) && depth > 0) return false;
+
+		const root = resolveContextModeRoot();
+		if (!root) return false;
+		const serverBundle = join(root, "server.bundle.mjs");
+		const bridgePath = join(root, "build", "adapters", "pi", "mcp-bridge.js");
+
+		const { bootstrapMCPTools } = await import(pathToFileURL(bridgePath).href);
+		if (typeof bootstrapMCPTools !== "function") return false;
+
+		// Spin up our own (hardened, context-mode-provided) bridge, but capture the
+		// tool defs it would register instead of registering them — we re-register
+		// them ourselves, later, with our renderers, so our version wins. Each def
+		// already carries a working execute() bound to the bridge's MCP client.
+		const recorded: any[] = [];
+		const recPi = new Proxy(pi, {
+			get(target, prop, receiver) {
+				if (prop === "registerTool") return (def: any) => recorded.push(def);
+				const value = Reflect.get(target as any, prop, receiver);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const handle = await bootstrapMCPTools(recPi as any, serverBundle);
+		const defs = recorded.filter((d) => d && typeof d.name === "string" && typeof d.execute === "function");
+		if (defs.length === 0) return false;
+		bridge = { defs, shutdown: handle?.shutdown };
+		return true;
+	}
+
+	async function ready(): Promise<void> {
+		const ok = await ensureBridge();
+		if (!ok || !bridge) return;
+		// Local extensions outrank packages in pi's tool registry, so registering the
+		// same ctx_* names here replaces context-mode's package registrations (and a
+		// package can't clobber a local extension back). One application is enough.
+		applyOverrides();
+	}
 
 	pi.on("before_agent_start", async () => {
-		if (started) return;
-		started = true;
-		try {
-			// Skip nested/subagent bridges — ctx_* tools aren't bridged at depth > 0.
-			const depth = Number.parseInt(process.env.CONTEXT_MODE_BRIDGE_DEPTH ?? "0", 10);
-			if (Number.isFinite(depth) && depth > 0) return;
-
-			const root = resolveContextModeRoot();
-			if (!root) return;
-			const serverBundle = join(root, "server.bundle.mjs");
-			const bridgePath = join(root, "build", "adapters", "pi", "mcp-bridge.js");
-
-			const { bootstrapMCPTools } = await import(pathToFileURL(bridgePath).href);
-			if (typeof bootstrapMCPTools !== "function") return;
-
-			// Proxy pi: pass everything through, but decorate ctx_* registrations
-			// with our nicer renderers.
-			const proxyPi = new Proxy(pi, {
-				get(target, prop, receiver) {
-					if (prop === "registerTool") {
-						return (def: any) =>
-							(target as any).registerTool({
-								...def,
-								renderCall: (args: any, theme: any) => renderCall(def.name, args, theme),
-								renderResult: (res: any, opts: any, theme: any) => renderResult(def.name, res, opts, theme),
-							});
-					}
-					const value = Reflect.get(target as any, prop, receiver);
-					return typeof value === "function" ? value.bind(target) : value;
-				},
+		if (!readiness) {
+			readiness = ready().catch((err) => {
+				process.stderr.write(
+					`[pi-ctx-ui] disabled (${err instanceof Error ? err.message : String(err)}); ` +
+						`context-mode's own tool UI remains active.\n`,
+				);
 			});
-
-			handle = await bootstrapMCPTools(proxyPi as any, serverBundle);
-		} catch (err) {
-			process.stderr.write(`[pi-ctx-ui] disabled (${err instanceof Error ? err.message : String(err)}); ` +
-				`context-mode's own tool UI remains active.\n`);
 		}
+		await readiness;
 	});
 
 	pi.on("session_shutdown", () => {
 		try {
-			handle?.shutdown?.();
+			bridge?.shutdown?.();
 		} catch {
 			/* best effort */
 		}

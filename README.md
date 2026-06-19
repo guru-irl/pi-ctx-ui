@@ -18,19 +18,41 @@ Results render with a `✓`/`✗` status line and full output when expanded.
 
 ## Install
 
+This extension must be installed as a **local extension** (auto-discovered from
+`~/.pi/agent/extensions/`), not as a pi package. In pi, package extensions can't
+override another package's tools, but local extensions outrank packages — which
+is how this cleanly replaces context-mode's `ctx_*` renderers.
+
 ```bash
-pi install git:github.com/guru-irl/pi-ctx-ui
+git clone https://github.com/guru-irl/pi-ctx-ui ~/.pi/agent/extensions/pi-ctx-ui
 ```
 
-Install it **after** context-mode so it loads later and its renderers win.
+pi auto-discovers `~/.pi/agent/extensions/*/index.ts` and hot-reloads it with
+`/reload`. Update later with:
+
+```bash
+git -C ~/.pi/agent/extensions/pi-ctx-ui pull
+```
+
+> Do **not** `pi install git:…/pi-ctx-ui` — installed as a package it loads with
+> package precedence and silently fails to override context-mode's tools.
 
 ## How it works (and why it's safe)
 
-It reuses context-mode's **own** hardened MCP bridge (`bootstrapMCPTools`) through a proxy `pi` that intercepts `registerTool` and swaps in nicer `renderCall`/`renderResult`. Execution, schema, transport, the fork-bomb depth guard, retries and respawn are all context-mode's code — this extension only restyles.
+It reuses context-mode's **own** hardened MCP bridge (`bootstrapMCPTools`): it
+spins up that bridge with a recording proxy to capture the exact tool defs
+(name, schema, and an `execute` already bound to context-mode's MCP client),
+then re-registers each one with nicer `renderCall`/`renderResult`. Execution,
+schema, transport, the fork-bomb depth guard, retries and respawn are all
+context-mode's code — this extension only restyles.
 
-- Registration happens in `before_agent_start`, after context-mode's bridge settles, so the override wins (last registration wins in pi).
-- If context-mode isn't installed, its bridge module can't be resolved, or anything throws, the extension **degrades silently** and context-mode's own tool UI stays active.
-- In nested/subagent bridges (`CONTEXT_MODE_BRIDGE_DEPTH > 0`) it does nothing — `ctx_*` tools aren't bridged there anyway.
+- As a local extension it outranks the context-mode package, so its `ctx_*`
+  registrations win deterministically.
+- If context-mode isn't installed, its bridge module can't be resolved, or
+  anything throws, the extension **degrades silently** and context-mode's own
+  tool UI stays active.
+- In nested/subagent bridges (`CONTEXT_MODE_BRIDGE_DEPTH > 0`) it does nothing —
+  `ctx_*` tools aren't bridged there anyway.
 
 ## Requirements
 
