@@ -1,0 +1,20 @@
+{
+  "name": "pi-ctx-ui",
+  "version": "0.1.0",
+  "description": "Nicer per-command tool UI for context-mode's ctx_* tools in pi.",
+  "keywords": ["pi-package", "pi", "extension", "context-mode", "ctx", "tool-ui", "renderer"],
+  "license": "MIT",
+  "author": "guru-irl",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guru-irl/pi-ctx-ui.git"
+  },
+  "files": ["index.ts", "README.md"],
+  "pi": {
+    "extensions": ["index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}
