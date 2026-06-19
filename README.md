@@ -54,6 +54,28 @@ context-mode's code — this extension only restyles.
 - In nested/subagent bridges (`CONTEXT_MODE_BRIDGE_DEPTH > 0`) it does nothing —
   `ctx_*` tools aren't bridged there anyway.
 
+## Configuration
+
+The call row for command tools (`ctx_execute`, `ctx_execute_file`,
+`ctx_batch_execute`) shows the **actual command/code lines** beneath the row,
+with a dim `│` gutter, so you can read what's running instead of a `N lines`
+summary:
+
+```
+ctx_execute shell
+│ echo one
+│ echo two
+│ echo three
+│ … (+7 more lines)
+```
+
+| Env var | Default | Effect |
+| --- | --- | --- |
+| `CTX_UI_CMD_LINES` | `10` | Max command lines shown on the call row. `0` disables the block (falls back to a compact `N lines` summary). |
+| `CTX_UI_CMD_WIDTH` | `120` | Per-line width before each line is clipped with an ellipsis. |
+
+Lines beyond the cap collapse into a `… (+N more lines)` marker.
+
 ## Requirements
 
 - pi with the `context-mode` package installed (the `ctx_*` tools come from it).

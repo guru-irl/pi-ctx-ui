@@ -35,6 +35,59 @@ const clip = (s: unknown, n = 72): string => {
 	return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 };
 
+/** Clip a single line to width WITHOUT collapsing internal whitespace (keeps code readable). */
+const clipLine = (s: unknown, n = 120): string => {
+	const t = String(s ?? "").replace(/\t/g, "  ").replace(/[\r\n]+$/, "");
+	return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+};
+
+/** Read a non-negative int env override; fall back to default when unset/invalid. */
+const cfgInt = (name: string, def: number): number => {
+	const raw = process.env[name];
+	if (raw == null || raw.trim() === "") return def;
+	const v = Number.parseInt(raw, 10);
+	return Number.isFinite(v) ? v : def;
+};
+// How many command/code lines to show on ctx_execute/_file/_batch call rows.
+// CTX_UI_CMD_LINES=0 disables the block (falls back to a compact line-count summary).
+// CTX_UI_CMD_WIDTH caps per-line width before an ellipsis.
+const CMD_MAX_LINES = (): number => cfgInt("CTX_UI_CMD_LINES", 10);
+const CMD_WIDTH = (): number => cfgInt("CTX_UI_CMD_WIDTH", 120);
+
+/** Render a command/code block: dim gutter, per-line clip, and a “+N more” marker. */
+function codeBlock(code: unknown, theme: any): string {
+	const max = CMD_MAX_LINES();
+	if (max <= 0) return "";
+	const dim = (s: string) => theme.fg("dim", s);
+	const raw = String(code ?? "").replace(/\s+$/g, "");
+	if (!raw) return "";
+	const lines = raw.split("\n");
+	const shown = lines.slice(0, max);
+	const body = shown.map((l) => dim("│ ") + theme.fg("toolOutput", clipLine(l, CMD_WIDTH()))).join("\n");
+	const extra = lines.length - shown.length;
+	return body + (extra > 0 ? `\n${dim(`│ … (+${extra} more line${extra === 1 ? "" : "s"})`)}` : "");
+}
+
+/** Optional multi-line body shown beneath the call row for command-ish tools. */
+function callBody(name: string, a: any, theme: any): string {
+	a = a ?? {};
+	try {
+		if (name === "ctx_execute" || name === "ctx_execute_file") {
+			const block = codeBlock(a.code, theme);
+			return block ? `\n${block}` : "";
+		}
+		if (name === "ctx_batch_execute") {
+			const cmds = Array.isArray(a.commands) ? a.commands : [];
+			const text = cmds.map((c: any) => `${c?.label ? `${c.label}: ` : ""}${c?.command ?? ""}`).join("\n");
+			const block = codeBlock(text, theme);
+			return block ? `\n${block}` : "";
+		}
+	} catch {
+		/* ignore */
+	}
+	return "";
+}
+
 const verb = (name: string): string =>
 	name === "ctx_search"
 		? "searching"
@@ -52,8 +105,10 @@ function summarize(name: string, a: any, theme: any): string {
 	try {
 		switch (name) {
 			case "ctx_execute": {
+				const head = mut(a.language || "code") + (a.background ? dim(" bg") : "");
+				if (CMD_MAX_LINES() > 0) return head; // full command shown as a block below the row
 				const lines = String(a.code ?? "").split("\n").length;
-				return mut(a.language || "code") + (a.background ? dim(" bg") : "") + dim(`  ${lines} line${lines === 1 ? "" : "s"}`);
+				return head + dim(`  ${lines} line${lines === 1 ? "" : "s"}`);
 			}
 			case "ctx_execute_file":
 				return acc(clip(a.path, 48)) + (a.language ? mut(` [${a.language}]`) : "");
@@ -92,7 +147,8 @@ function summarize(name: string, a: any, theme: any): string {
 function renderCall(name: string, args: any, theme: any) {
 	const title = theme.fg("toolTitle", theme.bold(name));
 	const detail = summarize(name, args, theme);
-	return new Text(detail ? `${title} ${detail}` : title, 0, 0);
+	const head = detail ? `${title} ${detail}` : title;
+	return new Text(head + callBody(name, args, theme), 0, 0);
 }
 
 function renderResult(name: string, result: any, options: any, theme: any) {
